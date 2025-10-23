@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: SEE LICENSE IN LICENSE
-pragma solidity >=0.8.0; 
+// SPDX-License-Identifier: GPL-3.0-or-later
+pragma solidity >=0.8.0;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Oracle} from "./oracle.sol";
+import {Oracle} from "./Oracle.sol";
 
 /// @title KipuBank - Un banco simple para depósitos y retiros de ETH
 /// @author Agustín M.
@@ -23,8 +23,7 @@ contract KipuBankV2 {
     struct Balances{
         uint256 eth;
         uint256 usdc;
-        uint256 total;
-    }
+     }
     IERC20 immutable public USDC;
 
 
@@ -69,7 +68,7 @@ contract KipuBankV2 {
         uint256 tokenBalance = USDC.balanceOf(address(this));
 
         // convertir tokenBalance a ETH
-        uint256 tokenInEth = _convertTokenToEth(tokenBalance);
+        uint256 tokenInEth = _convertTokenToEth();
 
         uint256 totalBalanceEth = ethBalance + tokenInEth;
 
@@ -89,33 +88,10 @@ contract KipuBankV2 {
     }
 
 
-
-    function _convertTokenToEth(uint256 tokenAmount) internal view returns (uint256) {
-        (, int ethUsd, , ,) = ethFeed.latestRoundData();
-        (, int tokenUsd, , ,) = tokenFeed.latestRoundData();
-
-        require(ethUsd > 0 && tokenUsd > 0, "Invalid oracle price");
-
-        // convertir todo a uint256 para cálculos seguros
-        uint256 ethUsdU = uint256(ethUsd);
-        uint256 tokenUsdU = uint256(tokenUsd);
-
-        // si los feeds tienen 8 decimales, ajustamos a 18 decimales (wei)
-        // esto depende del feed exacto que uses
-        uint8 decimals = 8;
-
-        // tokenInEth = tokenAmount * tokenUSD / ethUSD
-        uint256 tokenInEth = (tokenAmount * tokenUsdU) / ethUsdU;
-
-        // ajustar por decimales del feed
-        return tokenInEth / (10 ** decimals);
-    }
-
-
     /**
      * @notice Add ether to your balance, only if the amount is greater 0.1 ether 
      */
-    function addEth() external payable VerifyMinimumDeposit VerifyMaxBanckapLimit{
+    function addEth() external payable VerifyMinimumDeposit VerifyMaxBankCapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
         if ((balance[sender].eth += amount) > BANKCAP) revert ExceededGlobalLimit();
@@ -126,7 +102,7 @@ contract KipuBankV2 {
     /**
      * @notice Add ether to your balance and transform it into usdc, only if the amount is greater 0.1 ether 
      */
-    function addUSDC() external payable VerifyMinimumDeposit VerifyMaxBanckapLimit{
+    function addUSDC() external payable VerifyMinimumDeposit VerifyMaxBankCapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
         uint256 amountInUSDC = (amount * 1e8)/uint256(datafeed.getLatestPrice());
@@ -162,7 +138,8 @@ contract KipuBankV2 {
      * @return uint256 = Account balance
      */
     function getBalance() external view returns(uint256) {
-        return balance[msg.sender].eth;
+        uint256 total = balance[msg.sender].eth + _convertTokenToEth();
+        return total;
     }
 
      /**
@@ -254,4 +231,21 @@ contract KipuBankV2 {
             return _actualBalance - _amountToReduce;
         }
     }
+
+function _convertTokenToEth() internal view returns (uint256) {
+    int ethUsd = datafeed.getLatestPrice();
+
+    require(ethUsd > 0, "Invalid price from oracle");
+
+    uint256 ethUsdU = uint256(ethUsd);
+
+    // Asumimos que balance[msg.sender].usdc está en unidades de token (18 decimales)
+    uint256 tokenAmount = balance[msg.sender].usdc;
+
+    // Calcular valor equivalente en ETH
+    uint256 tokenInEth = (tokenAmount * 1) / ethUsdU;
+
+    return tokenInEth; // En unidades de ETH (ajustado por decimales de los oráculos)
+}
+
 }

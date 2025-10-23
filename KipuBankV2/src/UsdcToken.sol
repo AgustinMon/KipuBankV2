@@ -12,4 +12,3 @@ contract usdcToken is ERC20 {
 
 
 }
-

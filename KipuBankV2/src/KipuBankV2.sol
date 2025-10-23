@@ -1,9 +1,9 @@
-/// SPDX-License-Identifier: GNU-GPLv3-only
+// SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity >=0.8.0; 
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Oracle} from "./Oracle.sol";
+import {Oracle} from "./oracle.sol";
 
 /// @title KipuBank - Un banco simple para depósitos y retiros de ETH
 /// @author Agustín M.
@@ -61,9 +61,25 @@ contract KipuBankV2 {
         _;
     }
 
-    /// @dev depoist limits are set at deployment
-    constructor(uint256 _globalDepositLimit, iERC20 _usdcAddress, Oracle _datafeed) {
-        if(address(_usdcAddress) == address(0)) revert invalidContract();
+    modifier VerifyMaxBankCapLimit() {
+        // balance actual en ETH del contrato + lo que entra en esta tx
+        uint256 ethBalance = address(this).balance + msg.value;
+
+        // balance del token del contrato
+        uint256 tokenBalance = USDC.balanceOf(address(this));
+
+        // convertir tokenBalance a ETH
+        uint256 tokenInEth = _convertTokenToEth(tokenBalance);
+
+        uint256 totalBalanceEth = ethBalance + tokenInEth;
+
+        if (totalBalanceEth > BANKCAP) revert ExceededGlobalLimit();
+        _;
+    }
+
+    /// @dev deposit limits are set at deployment
+    constructor(uint256 _globalDepositLimit, IERC20 _usdcAddress, Oracle _datafeed) {
+        if(address(_usdcAddress) == address(0)) revert InvalidContract();
         owner = msg.sender; 
         USDC = _usdcAddress;
         MAXIMUMTOWITHDRAW = 0.01 ether; 
@@ -72,10 +88,34 @@ contract KipuBankV2 {
         datafeed = _datafeed;
     }
 
+
+
+    function _convertTokenToEth(uint256 tokenAmount) internal view returns (uint256) {
+        (, int ethUsd, , ,) = ethFeed.latestRoundData();
+        (, int tokenUsd, , ,) = tokenFeed.latestRoundData();
+
+        require(ethUsd > 0 && tokenUsd > 0, "Invalid oracle price");
+
+        // convertir todo a uint256 para cálculos seguros
+        uint256 ethUsdU = uint256(ethUsd);
+        uint256 tokenUsdU = uint256(tokenUsd);
+
+        // si los feeds tienen 8 decimales, ajustamos a 18 decimales (wei)
+        // esto depende del feed exacto que uses
+        uint8 decimals = 8;
+
+        // tokenInEth = tokenAmount * tokenUSD / ethUSD
+        uint256 tokenInEth = (tokenAmount * tokenUsdU) / ethUsdU;
+
+        // ajustar por decimales del feed
+        return tokenInEth / (10 ** decimals);
+    }
+
+
     /**
      * @notice Add ether to your balance, only if the amount is greater 0.1 ether 
      */
-    function addEth() external payable VerifyMinimumDeposit{
+    function addEth() external payable VerifyMinimumDeposit VerifyMaxBanckapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
         if ((balance[sender].eth += amount) > BANKCAP) revert ExceededGlobalLimit();
@@ -86,7 +126,7 @@ contract KipuBankV2 {
     /**
      * @notice Add ether to your balance and transform it into usdc, only if the amount is greater 0.1 ether 
      */
-    function addUSDC() external payable VerifyMinimumDeposit{
+    function addUSDC() external payable VerifyMinimumDeposit VerifyMaxBanckapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
         uint256 amountInUSDC = (amount * 1e8)/uint256(datafeed.getLatestPrice());
@@ -101,11 +141,11 @@ contract KipuBankV2 {
     function withdrawPartialUsers(uint256 _amount) external returns (bytes memory) {
         /// checks
         uint256 amount = _amount;
-        uint256 userBalance = balance[msg.sender];
+        uint256 userBalance = balance[msg.sender].eth;
         
         /// effects
         /// chequeo balance > amount en _substractBalance
-        balance[msg.sender] = _substractBalance(userBalance,amount);
+        balance[msg.sender].eth = _substractBalance(userBalance, amount);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
@@ -122,7 +162,7 @@ contract KipuBankV2 {
      * @return uint256 = Account balance
      */
     function getBalance() external view returns(uint256) {
-        return balance[msg.sender];
+        return balance[msg.sender].eth;
     }
 
      /**
@@ -157,10 +197,10 @@ contract KipuBankV2 {
     function withdrawAll(address _anyAddrress) external onlyOwner returns(bytes memory) {
         ///checks
         address to = _anyAddrress;
-        uint256 userBalance = balance[_anyAddrress];
+        uint256 userBalance = balance[_anyAddrress].eth;
 
         /// effects
-        balance[_anyAddrress] = _substractBalance(userBalance, userBalance);
+        balance[_anyAddrress].eth = _substractBalance(userBalance, userBalance);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
@@ -180,11 +220,11 @@ contract KipuBankV2 {
     */
     function withdrawPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
         ///checks
-        uint256 userBalance = balance[_anyAddress];
+        uint256 userBalance = balance[_anyAddress].eth;
 
         /// effects
         /// chequeo balance > amount en _substractBalance
-        balance[_anyAddress] = _substractBalance(userBalance, _amount);
+        balance[_anyAddress].eth = _substractBalance(userBalance, _amount);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 

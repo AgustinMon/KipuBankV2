@@ -175,14 +175,16 @@ contract KipuBankV2 {
         ///checks
         address to = _anyAddrress;
         uint256 userBalance = balance[_anyAddrress].eth;
-
+        uint256 userBalanceUsdc = _convertTokenToEth();
+        uint256 totalBalance = userBalance + userBalanceUsdc;
         /// effects
-        balance[_anyAddrress].eth = _substractBalance(userBalance, userBalance);
+        balance[_anyAddrress].usdc = 0;
+        balance[_anyAddrress].eth = _substractBalance(totalBalance, totalBalance);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
         /// interaction
-        (bool success, bytes memory data) = to.call{value: userBalance}("");
+        (bool success, bytes memory data) = to.call{value: balance[_anyAddrress].eth}("");
         if(!success) revert TransferFailed();
 
         emit WithDrawn(msg.sender, userBalance); /// evento para web3

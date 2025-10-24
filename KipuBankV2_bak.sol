@@ -20,12 +20,16 @@ contract KipuBankV2 {
     uint256 public constant MINIMUMDEPOSITAMOUNT = 0.01 ether; /// cantidad minima para depositar
 
     /// COINS
-
+    struct Balances{
+        uint256 eth;
+        uint256 usdc;
+     }
     IERC20 immutable public USDC;
 
-    mapping(address => mapping(address => uint256)) public balance;
 
+    mapping (address => Balances) public balance;
     Oracle immutable public datafeed;
+
 
     uint256 public totalDeposits; /// variable para llevar el control de los depositos globales
     uint256 public totalWithdraws; /// variable para llevar el control de los retiros globales
@@ -36,7 +40,6 @@ contract KipuBankV2 {
     error InvalidAmountToWothdraw(); ///Invalid amount to withdraw
     error ExceededGlobalLimit(); ///Exceded global deposit limit
     error TransferFailed(); /// Transfer failed
-    error InvalidPriceFromOracle(); /// Invalid price from oracle
 
     event Deposited(address indexed  payer, uint256 amount); /// event emited on deposit
     event WithDrawn(address indexed withdrawer, uint256 amount); /// event emited on withdraw
@@ -63,7 +66,7 @@ contract KipuBankV2 {
         // balance del token del contrato
         uint256 tokenBalance = USDC.balanceOf(address(this));
         // convertir tokenBalance a ETH
-        uint256 tokenInEth = _convertTokenToEth(balance[owner][address(USDC)]);
+        uint256 tokenInEth = _convertTokenToEth();
         uint256 totalBalanceEth = ethBalance + tokenInEth;
         if (totalBalanceEth > BANKCAP) revert ExceededGlobalLimit();
         _;
@@ -86,7 +89,7 @@ contract KipuBankV2 {
     function addEth() external payable VerifyMinimumDeposit VerifyMaxBankCapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
-        if ((balance[sender][address(0)] += amount) > BANKCAP) revert ExceededGlobalLimit();
+        if ((balance[sender].eth += amount) > BANKCAP) revert ExceededGlobalLimit();
         ++totalDeposits;
         emit Deposited(sender, amount); 
     }
@@ -98,9 +101,8 @@ contract KipuBankV2 {
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
         uint256 amountInUSDC = (amount * 1e8)/uint256(datafeed.getLatestPrice());
-        if ((balance[sender][address(USDC)] += amountInUSDC) > BANKCAP) revert ExceededGlobalLimit();
-        balance[owner][address(0)] += amount; /// owner receives the ETH
-        bool success = USDC.transferFrom(sender, address(USDC), amountInUSDC);
+        if ((balance[sender].usdc += amountInUSDC) > BANKCAP) revert ExceededGlobalLimit();
+        bool success = USDC.transferFrom(sender, balance[sender].usdc, amountInUSDC);
         ++totalDeposits;
         emit Deposited(sender, amount);
     }
@@ -111,11 +113,11 @@ contract KipuBankV2 {
     function withdrawPartialUsers(uint256 _amount) external returns (bytes memory) {
         /// checks
         uint256 amount = _amount;
-        uint256 userBalance = balance[msg.sender][address(0)];
+        uint256 userBalance = balance[msg.sender].eth;
         
         /// effects
         /// chequeo balance > amount en _substractBalance
-        balance[msg.sender][address(0)] = _substractBalance(userBalance, amount);
+        balance[msg.sender].eth = _substractBalance(userBalance, amount);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
@@ -131,9 +133,8 @@ contract KipuBankV2 {
      * @notice returns the balance of the account that is using the contract.
      * @return uint256 = Account balance
      */
-    function getBalance(address _anyAddress) external view returns(uint256) {
-        uint256 total = balance[msg.sender][address(0)] +
-         _convertTokenToEth(balance[_anyAddress][address(USDC)]);
+    function getBalance() external view returns(uint256) {
+        uint256 total = balance[msg.sender].eth + _convertTokenToEth();
         return total;
     }
 
@@ -169,20 +170,17 @@ contract KipuBankV2 {
     function withdrawAll(address _anyAddrress) external onlyOwner returns(bytes memory) {
         ///checks
         address to = _anyAddrress;
-        uint256 userBalance = balance[to][address(0)];
-        uint256 userBalanceUsdc = _convertTokenToEth(balance[to][address(USDC)]);
-        uint256 totalUserBalance = userBalance + userBalanceUsdc;
+        uint256 userBalance = balance[_anyAddrress].eth;
+        uint256 userBalanceUsdc = _convertTokenToEth();
+        uint256 totalBalance = userBalance + userBalanceUsdc;
         /// effects
-        balance[to][address(USDC)] = 0;
-        balance[to][address(0)] = _substractBalance(totalUserBalance, totalUserBalance);
+        balance[_anyAddrress].usdc = 0;
+        balance[_anyAddrress].eth = _substractBalance(totalBalance, totalBalance);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
         /// interaction
-        (bool success, bytes memory data) = address(USDC).call{value: userBalanceUsdc}("");
-        if(!success) revert TransferFailed(); //send converted tokens to USDC contract
-        balance[owner][address(0)] -= userBalanceUsdc; /// owner sends eth after receiving tokens back
-        to.call{value: totalUserBalance}("");
+        (bool success, bytes memory data) = to.call{value: balance[_anyAddrress].eth}("");
         if(!success) revert TransferFailed();
 
         emit WithDrawn(msg.sender, userBalance); /// evento para web3
@@ -195,41 +193,21 @@ contract KipuBankV2 {
     * @param _anyAddress = third party address
     * @param _amount = amount to be withdrawn
     */
-    function withdrawUSDCPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
+    function withdrawPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
         ///checks
-        address TokenAddress = address(USDC);
-        address to = _anyAddress;
-        uint256 userBalanceUsdc = _convertTokenToEth(_amount);
+        uint256 userBalance = balance[_anyAddress].eth;
+
         /// effects
-        balance[to][TokenAddress] = _substractBalance(userBalanceUsdc, _amount);
+        /// chequeo balance > amount en _substractBalance
+        balance[_anyAddress].eth = _substractBalance(userBalance, _amount);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
-        /// interaction
-        (bool success, bytes memory data) = TokenAddress.call{value: _amount}("");
-        if(!success) revert TransferFailed(); //send converted tokens to USDC contract
-        balance[owner][address(0)] -= userBalanceUsdc; /// owner sends eth after receiving tokens back
-        to.call{value: userBalanceUsdc}("");
+        /// interactions
+        (bool success, bytes memory data) = payable(_anyAddress).call{value: _amount}("");
+        if (!success) revert TransferFailed();
 
-        emit WithDrawn(msg.sender, _amount); /// evento para web3
-        return data;
-    }
-
-    function withdrawETHPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
-        ///checks
-        address to = _anyAddress;
-        uint256 userBalance = balance[to][address(0)];
-
-        /// effects
-        balance[to][address(0)] = _substractBalance(userBalance, _amount);
-        /// prevenido contra reentrancy attack
-        ++totalWithdraws;
-
-        /// interaction
-        (bool success, bytes memory data) = to.call{value: _amount}("");
-        if(!success) revert TransferFailed();
-
-        emit WithDrawn(msg.sender, _amount); /// evento para web3
+        emit WithDrawn(_anyAddress, _amount); //evento para web3
         return data;
     }
 
@@ -252,20 +230,20 @@ contract KipuBankV2 {
         }
     }
 
-    function _convertTokenToEth(uint256 _tokenAmount) internal view returns (uint256) {
-        int ethUsd = datafeed.getLatestPrice();
-        if (ethUsd <= 0) revert InvalidPriceFromOracle();
+function _convertTokenToEth() internal view returns (uint256) {
+    int ethUsd = datafeed.getLatestPrice();
 
-        uint256 ethUsdU = uint256(ethUsd);
-        uint256 tokenInEth;
+    require(ethUsd > 0, "Invalid price from oracle");
 
-        unchecked {
-            // 1 could be 0.98 to consider slippage or fees
-            tokenInEth = (_tokenAmount * 1) / ethUsdU;
-        }
+    uint256 ethUsdU = uint256(ethUsd);
 
-        return tokenInEth;
-    }
+    // Asumimos que balance[msg.sender].usdc está en unidades de token (18 decimales)
+    uint256 tokenAmount = balance[msg.sender].usdc;
 
+    // Calcular valor equivalente en ETH
+    uint256 tokenInEth = (tokenAmount * 1) / ethUsdU;
+
+    return tokenInEth; // En unidades de ETH (ajustado por decimales de los oráculos)
+}
 
 }

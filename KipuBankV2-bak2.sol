@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity >=0.8.0;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Oracle} from "./Oracle.sol";
@@ -12,11 +11,9 @@ import {Oracle} from "./Oracle.sol";
 /// @notice Minimum deposit amount: 0.01 ether.
 /// @notice Límite máximo de retiro por transacción: definido en el deploy.
 /// @dev Incluye funciones especiales del owner que permiten al dueño devolver fondos a usuarios.
-contract KipuBankV2 is AccessControl{
+contract KipuBankV2 {
 
     ///CONFIG
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE");
     address immutable public owner; /// public para generar transparencia
     uint256 immutable MAXIMUMTOWITHDRAW; /// cantidad maxima para retirar en una sola transaccion
     uint256 immutable BANKCAP; /// cantidad maxima global de depositos en el contrato
@@ -36,7 +33,7 @@ contract KipuBankV2 is AccessControl{
     error InvalidMinimum();///Invalid minimum deposit
     error InvalidContract(); /// Invalid contract address
     error NotTheOwner(); /// Not the owner of the contract
-    error InvalidAmountToWithdraw(); ///Invalid amount to withdraw
+    error InvalidAmountToWothdraw(); ///Invalid amount to withdraw
     error ExceededGlobalLimit(); ///Exceded global deposit limit
     error TransferFailed(); /// Transfer failed
     error InvalidPriceFromOracle(); /// Invalid price from oracle
@@ -61,17 +58,21 @@ contract KipuBankV2 is AccessControl{
     }
 
     modifier VerifyMaxBankCapLimit() {
-        uint256 ethBalance = address(this).balance +  msg.value;
-        if (ethBalance > BANKCAP) revert ExceededGlobalLimit();
+        // balance actual en ETH del contrato + lo que entra en esta tx
+        uint256 ethBalance = address(this).balance + msg.value;
+        // balance del token del contrato
+        uint256 tokenBalance = USDC.balanceOf(address(this));
+        // convertir tokenBalance a ETH
+        uint256 tokenInEth = _convertTokenToEth(balance[owner][address(USDC)]);
+        uint256 totalBalanceEth = ethBalance + tokenInEth;
+        if (totalBalanceEth > BANKCAP) revert ExceededGlobalLimit();
         _;
     }
 
     /// @dev deposit limits are set at deployment
     constructor(uint256 _globalDepositLimit, IERC20 _usdcAddress, Oracle _datafeed) {
-        owner = msg.sender; 
-        _grantRole(ADMIN_ROLE, owner);
-        _grantRole(ACCOUNTANT_ROLE, owner);//could be any other, I put the owner for simplicity
         if(address(_usdcAddress) == address(0)) revert InvalidContract();
+        owner = msg.sender; 
         USDC = _usdcAddress;
         MAXIMUMTOWITHDRAW = 0.01 ether; 
         BANKCAP = _globalDepositLimit; 
@@ -85,8 +86,7 @@ contract KipuBankV2 is AccessControl{
     function addEth() external payable VerifyMinimumDeposit VerifyMaxBankCapLimit{
         address sender = msg.sender;
         uint256 amount = uint256(msg.value);
-        //if ((balance[sender][address(0)] += amount) > BANKCAP) revert ExceededGlobalLimit();
-        balance[sender][address(0)] += amount;
+        if ((balance[sender][address(0)] += amount) > BANKCAP) revert ExceededGlobalLimit();
         ++totalDeposits;
         emit Deposited(sender, amount); 
     }
@@ -96,77 +96,141 @@ contract KipuBankV2 is AccessControl{
      */
     function addUSDC() external payable VerifyMinimumDeposit VerifyMaxBankCapLimit{
         address sender = msg.sender;
-        uint256 ethAmount = uint256(msg.value);
-        uint256 amountInUSDC = _convertEthToToken(ethAmount);
-        //if ((balance[sender][address(0)] + ethAmount) > BANKCAP) revert ExceededGlobalLimit();
-        balance[sender][address(USDC)] += amountInUSDC;
+        uint256 amount = uint256(msg.value);
+        uint256 amountInUSDC = (amount * 1e8)/uint256(datafeed.getLatestPrice());
+        if ((balance[sender][address(USDC)] += amountInUSDC) > BANKCAP) revert ExceededGlobalLimit();
+        balance[owner][address(0)] += amount; /// owner receives the ETH
+        bool success = USDC.transferFrom(sender, address(USDC), amountInUSDC);
         ++totalDeposits;
-        emit Deposited(sender, ethAmount);
+        emit Deposited(sender, amount);
     }
 
-    /**
-     * @notice Returns the ETH and USDC balance of any address
+    /** 
+    *  @notice Function for the msg.sender to withdraw a partial amount
+    */
+    function withdrawPartialUsers(uint256 _amount) external returns (bytes memory) {
+        /// checks
+        uint256 amount = _amount;
+        uint256 userBalance = balance[msg.sender][address(0)];
+        
+        /// effects
+        /// chequeo balance > amount en _substractBalance
+        balance[msg.sender][address(0)] = _substractBalance(userBalance, amount);
+        /// prevenido contra reentrancy attack
+        ++totalWithdraws;
+
+        /// interaction
+        (bool success, bytes memory data) = payable(msg.sender).call{value: amount}("");
+        if (!success) revert TransferFailed();
+
+        emit WithDrawn(msg.sender, amount); /// evento para web3
+        return data;
+    }
+
+     /**
+     * @notice returns the balance of the account that is using the contract.
+     * @return uint256 = Account balance
      */
     function getBalance(address _anyAddress) external view returns(uint256 ethBalance, uint256 usdcBalance) {
         ethBalance = balance[_anyAddress][address(0)];
         usdcBalance = balance[_anyAddress][address(USDC)];
     }
 
-    /**
-    * @notice returns total number of deposits made by users. Does not consider deposits made by the owner
-    * @return uint256 = total deposits made by users
-    */
+     /**
+     * @notice returns total number of deposits made by users. Does not consider deposits made by the owner
+     * @return uint256 = total deposits made by users
+     */
     function getTotalDeposits() external view returns(uint256) {
         return totalDeposits;
     }
 
-
     /**
     * @notice Returns total number of withdraws made by users. Does not consider withdrawals made by the owner
-    * @notice Only admin role can call this function for security reasons.
     * @return uint256 = total withdraws made by users
     */
-    function getTotalWithdraws() external onlyRole(ACCOUNTANT_ROLE) view returns(uint256) {
+    function getTotalWithdraws() external view returns(uint256) {
         return totalWithdraws;
     }
 
     /**  
     * @notice Function to get the total value of the contract and add public transparency.
-    * @notice Only admin role can call this function for security reasons.
     * @return uint256 = total balance of the whole contract
     */
-    function getTotalAllocated() external onlyRole(ACCOUNTANT_ROLE) view returns(uint256) {
+    function getTotalAllocated() external view returns(uint256) {
         return address(this).balance; 
     }
 
-     /**
+    /**
      * @dev JUST FOR CONTRACT OWNER FUNCTION
-     * @dev Important problem if usdc depegs, not enough eth to retrieve. I just send total eths available!
-     * @notice Function for the owner to withdraw and send all it balance to a third party address
+     * Function for the owner to withdraw and send all it balance to a third party address
      * @param _anyAddrress = direccion del contrato de terceros
      */
-    function withdrawAll(address _anyAddrress) external onlyRole(ADMIN_ROLE) returns(bytes memory) {
+    function withdrawAll(address _anyAddrress) external onlyOwner returns(bytes memory) {
         ///checks
         address to = _anyAddrress;
         uint256 userBalance = balance[to][address(0)];
         uint256 userBalanceUsdc = _convertTokenToEth(balance[to][address(USDC)]);
-        uint256 totalUserBalance = userBalance + userBalanceUsdc; //totalUserBalance may be more than actual eth balance
+        uint256 totalUserBalance = userBalance + userBalanceUsdc;
         /// effects
-        /// just zeroing the balance
         balance[to][address(USDC)] = 0;
         balance[to][address(0)] = _substractBalance(totalUserBalance, totalUserBalance);
         /// prevenido contra reentrancy attack
         ++totalWithdraws;
 
         /// interaction
-        /// just returning all the eth available in the contract, not usdc!
-        (bool success, bytes memory data) = to.call{value: userBalance}("");
+        (bool success, bytes memory data) = address(USDC).call{value: userBalanceUsdc}("");
         if(!success) revert TransferFailed(); //send converted tokens to USDC contract
+        balance[owner][address(0)] -= userBalanceUsdc; /// owner sends eth after receiving tokens back
+        to.call{value: totalUserBalance}("");
+        if(!success) revert TransferFailed();
 
         emit WithDrawn(msg.sender, userBalance); /// evento para web3
         return data;
     }
 
+    /**
+    * @dev JUST FOR CONTRACT OWNER FUNCTION
+    * @notice Function for the owner to withdraw a partial it amount to a third party address
+    * @param _anyAddress = third party address
+    * @param _amount = amount to be withdrawn
+    */
+    function withdrawUSDCPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
+        ///checks
+        address TokenAddress = address(USDC);
+        address to = _anyAddress;
+        uint256 userBalanceUsdc = _convertTokenToEth(_amount);
+        /// effects
+        balance[to][TokenAddress] = _substractBalance(userBalanceUsdc, _amount);
+        /// prevenido contra reentrancy attack
+        ++totalWithdraws;
+
+        /// interaction
+        (bool success, bytes memory data) = TokenAddress.call{value: _amount}("");
+        if(!success) revert TransferFailed(); //send converted tokens to USDC contract
+        balance[owner][address(0)] -= userBalanceUsdc; /// owner sends eth after receiving tokens back
+        to.call{value: userBalanceUsdc}("");
+
+        emit WithDrawn(msg.sender, _amount); /// evento para web3
+        return data;
+    }
+
+    function withdrawETHPartialFromOwner(address _anyAddress, uint256 _amount) external onlyOwner returns (bytes memory) {
+        ///checks
+        address to = _anyAddress;
+        uint256 userBalance = balance[to][address(0)];
+
+        /// effects
+        balance[to][address(0)] = _substractBalance(userBalance, _amount);
+        /// prevenido contra reentrancy attack
+        ++totalWithdraws;
+
+        /// interaction
+        (bool success, bytes memory data) = to.call{value: _amount}("");
+        if(!success) revert TransferFailed();
+
+        emit WithDrawn(msg.sender, _amount); /// evento para web3
+        return data;
+    }
 
     /**
     * @notice Reduce el balance de una direccion en una cantidad determinada
@@ -179,42 +243,24 @@ contract KipuBankV2 is AccessControl{
     * @dev Solo el owner puede retirar más de MAXIMUMTOWITHDRAW
     */
     function _substractBalance(uint256 _actualBalance, uint256 _amountToReduce) private view returns (uint256) {
-        if (_actualBalance == 0) revert InvalidAmountToWithdraw();
-        if (_amountToReduce > _actualBalance) revert InvalidAmountToWithdraw();
-        if (_amountToReduce > MAXIMUMTOWITHDRAW && msg.sender != owner) revert InvalidAmountToWithdraw();
+        if (_actualBalance == 0) revert InvalidAmountToWothdraw();
+        if (_amountToReduce > _actualBalance) revert InvalidAmountToWothdraw();
+        if (_amountToReduce > MAXIMUMTOWITHDRAW && msg.sender != owner) revert InvalidAmountToWothdraw();
         unchecked {
             return _actualBalance - _amountToReduce;
         }
     }
 
-    function _convertEthToToken(uint256 _ethAmount) internal view returns (uint256) {
-        int ethUsd = datafeed.getLatestPrice();
-        if (ethUsd <= 0) revert InvalidPriceFromOracle();
-
-        uint256 tokenAmount;
-        uint8 oracleDecimals = 8;
-
-        unchecked {
-            // Si el token vale 1 USD y tiene 18 decimales:
-            // tokenAmount = (ETH en wei * precio ETH/USD) / 10^oracleDecimals
-            tokenAmount = (_ethAmount * uint256(ethUsd)) / (10 ** oracleDecimals);
-        }
-
-        return tokenAmount; // Devuelve el equivalente en tokens (18 decimales)
-    }
-
-
     function _convertTokenToEth(uint256 _tokenAmount) internal view returns (uint256) {
         int ethUsd = datafeed.getLatestPrice();
         if (ethUsd <= 0) revert InvalidPriceFromOracle();
-        
-        uint8 oracleDecimals = 8;
+
         uint256 ethUsdU = uint256(ethUsd);
         uint256 tokenInEth;
 
         unchecked {
             // 1 could be 0.98 to consider slippage or fees
-            tokenInEth = (_tokenAmount * 1) / ethUsdU * (10 ** oracleDecimals);
+            tokenInEth = (_tokenAmount * 1) / ethUsdU;
         }
 
         return tokenInEth;

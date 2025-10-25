@@ -140,7 +140,7 @@ contract KipuBankV2 is AccessControl{
     }
 
      /**
-     * @dev JUST FOR CONTRACT OWNER FUNCTION
+     * @dev JUST FOR ADMIN FUNCTION
      * @dev Important problem if usdc depegs, not enough eth to retrieve. I just send total eths available!
      * @notice Function for the owner to withdraw and send all it balance to a third party address
      * @param _anyAddrress = direccion del contrato de terceros
@@ -149,7 +149,7 @@ contract KipuBankV2 is AccessControl{
         ///checks
         address to = _anyAddrress;
         uint256 userBalance = balance[to][address(0)];
-        uint256 userBalanceUsdc = _convertTokenToEth(balance[to][address(USDC)]);
+        uint256 userBalanceUsdc = _convertTokenToWei(balance[to][address(USDC)]);
         uint256 totalUserBalance = userBalance + userBalanceUsdc; //totalUserBalance may be more than actual eth balance
         /// effects
         /// just zeroing the balance
@@ -187,6 +187,13 @@ contract KipuBankV2 is AccessControl{
         }
     }
 
+    /**
+     * @notice converts eth (expressed in weis) to usdc (expressed in 18 decimals)
+     * @param _ethAmount = eth quantity
+     * @return uint256 = equivalent usdc tokens in 18 decimals
+     * @dev eth price obtained from Chainlink Oracle
+     */
+
     function _convertEthToToken(uint256 _ethAmount) internal view returns (uint256) {
         int ethUsd = datafeed.getLatestPrice();
         if (ethUsd <= 0) revert InvalidPriceFromOracle();
@@ -203,22 +210,23 @@ contract KipuBankV2 is AccessControl{
         return tokenAmount; // Devuelve el equivalente en tokens (18 decimales)
     }
 
+    /**
+     * @notice converts usdc tokens (expressed in 18 decimals) to Eth, expressed in wei
+     * @param _ethAmount = usdc tokens quantity
+     * @return uint256 = equivalen eth expressed in wei
+     * @dev eth price obtained from Chainlink Oracle
+     */
+    function _convertTokenToWei(uint256 _tokenAmount) internal view returns (uint256) {
+    int ethUsd = datafeed.getLatestPrice();
+    if (ethUsd <= 0) revert InvalidPriceFromOracle();
 
-    function _convertTokenToEth(uint256 _tokenAmount) internal view returns (uint256) {
-        int ethUsd = datafeed.getLatestPrice();
-        if (ethUsd <= 0) revert InvalidPriceFromOracle();
-        
-        uint8 oracleDecimals = 8;
-        uint256 ethUsdU = uint256(ethUsd);
-        uint256 tokenInEth;
+    uint8 oracleDecimals = 8;
+    uint256 ethAmount;
 
-        unchecked {
-            // 1 could be 0.98 to consider slippage or fees
-            tokenInEth = (_tokenAmount * 1) / ethUsdU * (10 ** oracleDecimals);
-        }
-
-        return tokenInEth;
+    unchecked {
+        // ETH = (tokenAmount * 10^oracleDecimals) / (precio ETH/USD)
+        ethAmount = (_tokenAmount * (10 ** oracleDecimals)) / uint256(ethUsd);
     }
-
-
+        return ethAmount; 
+    }
 }

@@ -38,10 +38,11 @@ Por eso se deshabilitaron los retiros aunque sí se realizan converciones entre 
 - Se agregó soporte de roles de administrador para probar la función de retiro
 - Se agregó función de accountant para que este rol pueda verificar las cantidades de depósitos y retiros realizados. Esto es exclusivo para que cualquier usuario no pueda ver los movimientos del banco.
 
-## Contrato desplegado:
+## Contrato desplegado: https://sepolia.etherscan.io/address/0x54523457C970C98E5216578C368D9c007908ecbc
 ## Github del código fuente: https://github.com/AgustinMon/KipuBankV2
 
 
 oracle: 0x6349bf6E3E5f8FbF07C9A1aD1e261b9794481ae8<br/>
 usdcToken: 0x0D03235B14F635051Eefbd520DDc7f1d93002cC2. (10.000 tokens emitidos)<br/>
 kipuBankV2: 0x54523457C970C98E5216578C368D9c007908ecbc<br/>
+

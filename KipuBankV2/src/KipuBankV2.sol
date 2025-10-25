@@ -15,20 +15,20 @@ import {Oracle} from "./Oracle.sol";
 contract KipuBankV2 is AccessControl{
 
     ///CONFIG
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE");
-    address immutable public owner; /// public para generar transparencia
-    uint256 immutable MAXIMUMTOWITHDRAW; /// cantidad maxima para retirar en una sola transaccion
-    uint256 immutable BANKCAP; /// cantidad maxima global de depositos en el contrato
-    uint256 public constant MINIMUMDEPOSITAMOUNT = 0.01 ether; /// cantidad minima para depositar
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE"); // role for admin, interact with withdraw function and test
+    bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE"); // for private statistics
+    address immutable public owner; /// public for transparency purposes
+    uint256 immutable MAXIMUMTOWITHDRAW; /// max amount to withdraw in one transaction
+    uint256 immutable BANKCAP; /// max quantity this contract can bear
+    uint256 public constant MINIMUMDEPOSITAMOUNT = 0.01 ether; /// minimum amount to deposit
 
     /// COINS
 
-    IERC20 immutable public USDC;
+    IERC20 immutable public USDC; /// testing token
 
-    mapping(address => mapping(address => uint256)) public balance;
+    mapping(address => mapping(address => uint256)) public balance; ///mapping address => eth(0), token address => amount owned
 
-    Oracle immutable public datafeed;
+    Oracle immutable public datafeed; /// Chainlink datafeed contract address
 
     uint256 public totalDeposits; /// variable para llevar el control de los depositos globales
     uint256 public totalWithdraws; /// variable para llevar el control de los retiros globales
@@ -60,6 +60,9 @@ contract KipuBankV2 is AccessControl{
         _;
     }
 
+    /** 
+    * @notice this modifier verifies that the contract is below bankcap limit
+    */
     modifier VerifyMaxBankCapLimit() {
         uint256 ethBalance = address(this).balance +  msg.value;
         if (ethBalance > BANKCAP) revert ExceededGlobalLimit();
@@ -210,7 +213,7 @@ contract KipuBankV2 is AccessControl{
         return tokenAmount; // Devuelve el equivalente en tokens (18 decimales)
     }
 
-    /**
+    /*
      * @notice converts usdc tokens (expressed in 18 decimals) to Eth, expressed in wei
      * @param _ethAmount = usdc tokens quantity
      * @return uint256 = equivalen eth expressed in wei

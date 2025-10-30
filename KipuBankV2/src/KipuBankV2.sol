@@ -6,32 +6,31 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Oracle} from "./Oracle.sol";
 
-/// @title KipuBank - Un banco simple para depósitos y retiros de ETH
-/// @author Agustín M.
-/// @notice This contract allows users to deposit and withdraw ether with certain limits.
-/// @notice Minimum deposit amount: 0.01 ether.
-/// @notice Límite máximo de retiro por transacción: definido en el deploy.
-/// @dev Incluye funciones especiales del owner que permiten al dueño devolver fondos a usuarios.
+/**
+ * @title KipuBank - Un banco simple para depósitos y retiros de ETH
+ * @author Agustín M.
+ * @noticeThis contract allows users to deposit and withdraw ether with certain limits. 
+ * Minimum deposit amount: 0.01 ether.
+ * Límite máximo de retiro por transacción: definido en el deploy.
+ * @dev Incluye funciones especiales del owner que permiten al dueño devolver fondos a usuarios.
+ */
 contract KipuBankV2 is AccessControl{
 
-    ///CONFIG
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE"); // role for admin, interact with withdraw function and test
     bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE"); // for private statistics
-    address immutable public owner; /// public for transparency purposes
-    uint256 immutable MAXIMUMTOWITHDRAW; /// max amount to withdraw in one transaction
-    uint256 immutable BANKCAP; /// max quantity this contract can bear
-    uint256 public constant MINIMUMDEPOSITAMOUNT = 0.01 ether; /// minimum amount to deposit
+    address immutable public owner; // public for transparency purposes
+    uint256 immutable MAXIMUMTOWITHDRAW; // max amount to withdraw in one transaction
+    uint256 immutable BANKCAP; // max quantity this contract can bear
+    uint256 public constant MINIMUMDEPOSITAMOUNT = 0.01 ether; // minimum amount to deposit
 
-    /// COINS
+    IERC20 immutable public USDC; // testing token
 
-    IERC20 immutable public USDC; /// testing token
+    mapping(address => mapping(address => uint256)) public balance; //mapping address => eth(0), token address => amount owned
 
-    mapping(address => mapping(address => uint256)) public balance; ///mapping address => eth(0), token address => amount owned
+    Oracle immutable public datafeed; // Chainlink datafeed contract address
 
-    Oracle immutable public datafeed; /// Chainlink datafeed contract address
-
-    uint256 public totalDeposits; /// variable para llevar el control de los depositos globales
-    uint256 public totalWithdraws; /// variable para llevar el control de los retiros globales
+    uint256 public totalDeposits; // variable para llevar el control de los depositos globales
+    uint256 public totalWithdraws; // variable para llevar el control de los retiros globales
     
     error InvalidMinimum();///Invalid minimum deposit
     error InvalidContract(); /// Invalid contract address
@@ -101,7 +100,7 @@ contract KipuBankV2 is AccessControl{
         address sender = msg.sender;
         uint256 ethAmount = uint256(msg.value);
         uint256 amountInUSDC = _convertEthToToken(ethAmount);
-        //if ((balance[sender][address(0)] + ethAmount) > BANKCAP) revert ExceededGlobalLimit();
+        // if ((balance[sender][address(0)] + ethAmount) > BANKCAP) revert ExceededGlobalLimit();
         balance[sender][address(USDC)] += amountInUSDC;
         ++totalDeposits;
         emit Deposited(sender, ethAmount);
@@ -144,50 +143,30 @@ contract KipuBankV2 is AccessControl{
 
      /**
      * @dev JUST FOR ADMIN FUNCTION
-     * @dev Important problem if usdc depegs, not enough eth to retrieve. I just send total eths available!
+     * Important problem if usdc depegs, not enough eth to retrieve. I just send total eths available!
      * @notice Function for the owner to withdraw and send all it balance to a third party address
      * @param _anyAddrress = direccion del contrato de terceros
      */
     function withdrawAll(address _anyAddrress) external onlyRole(ADMIN_ROLE) returns(bytes memory) {
-        ///checks
+        // checks
         address to = _anyAddrress;
         uint256 userBalance = balance[to][address(0)];
         uint256 userBalanceUsdc = _convertTokenToWei(balance[to][address(USDC)]);
-        uint256 totalUserBalance = userBalance + userBalanceUsdc; //totalUserBalance may be more than actual eth balance
-        /// effects
-        /// just zeroing the balance
+        uint256 totalUserBalance = userBalance + userBalanceUsdc; // totalUserBalance may be more than actual eth balance
+        // effects
+        // just zeroing the balance
         balance[to][address(USDC)] = 0;
-        balance[to][address(0)] = _substractBalance(totalUserBalance, totalUserBalance);
-        /// prevenido contra reentrancy attack
+        balance[to][address(0)] = 0;
+        // prevenido contra reentrancy attack
         ++totalWithdraws;
 
-        /// interaction
-        /// just returning all the eth available in the contract, not usdc!
+        // interaction
+        // just returning all the eth available in the contract, not usdc!
         (bool success, bytes memory data) = to.call{value: userBalance}("");
-        if(!success) revert TransferFailed(); //send converted tokens to USDC contract
+        if(!success) revert TransferFailed(); // send converted tokens to USDC contract
 
-        emit WithDrawn(msg.sender, userBalance); /// evento para web3
+        emit WithDrawn(msg.sender, userBalance); // event for web3
         return data;
-    }
-
-
-    /**
-    * @notice Reduce el balance de una direccion en una cantidad determinada
-    * @notice Independientemente de que consume un poquito más gas, se decidió crear esta función para separar trabajos.
-    * @notice Reduces the balance of an address by a determined amount
-    * @notice Regardless of whether more gas is consumed, it was decided to create this function to separate tasks
-    * @param _actualBalance = balance before reduction
-    * @param _amountToReduce = amount to be reduced from balance
-    * @return uint256 = returns updated balance
-    * @dev Solo el owner puede retirar más de MAXIMUMTOWITHDRAW
-    */
-    function _substractBalance(uint256 _actualBalance, uint256 _amountToReduce) private view returns (uint256) {
-        if (_actualBalance == 0) revert InvalidAmountToWithdraw();
-        if (_amountToReduce > _actualBalance) revert InvalidAmountToWithdraw();
-        if (_amountToReduce > MAXIMUMTOWITHDRAW && msg.sender != owner) revert InvalidAmountToWithdraw();
-        unchecked {
-            return _actualBalance - _amountToReduce;
-        }
     }
 
     /**
@@ -196,7 +175,6 @@ contract KipuBankV2 is AccessControl{
      * @return uint256 = equivalent usdc tokens in 18 decimals
      * @dev eth price obtained from Chainlink Oracle
      */
-
     function _convertEthToToken(uint256 _ethAmount) internal view returns (uint256) {
         int ethUsd = datafeed.getLatestPrice();
         if (ethUsd <= 0) revert InvalidPriceFromOracle();
@@ -213,7 +191,7 @@ contract KipuBankV2 is AccessControl{
         return tokenAmount; // Devuelve el equivalente en tokens (18 decimales)
     }
 
-    /*
+    /** 
      * @notice converts usdc tokens (expressed in 18 decimals) to Eth, expressed in wei
      * @param _ethAmount = usdc tokens quantity
      * @return uint256 = equivalen eth expressed in wei

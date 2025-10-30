@@ -9,10 +9,9 @@ import {Oracle} from "./Oracle.sol";
 /**
  * @title KipuBank - Un banco simple para depósitos y retiros de ETH
  * @author Agustín M.
- * @noticeThis contract allows users to deposit and withdraw ether with certain limits. 
+ * @notice This contract allows users to deposit and withdraw ether with certain limits. 
  * Minimum deposit amount: 0.01 ether.
- * Límite máximo de retiro por transacción: definido en el deploy.
- * @dev Incluye funciones especiales del owner que permiten al dueño devolver fondos a usuarios.
+ * Withdraw limit defined at deploy. 
  */
 contract KipuBankV2 is AccessControl{
 
